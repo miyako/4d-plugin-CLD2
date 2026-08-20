@@ -90,12 +90,12 @@ elseif(WIN32)
         LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/CLD2.def"
     )
 
-    set(PLUGIN_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/CLD2-test/Plugins")
+    set(PLUGIN_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/CLD2-test/Plugins/CLD2/Contents")
     add_custom_command(TARGET CLD2 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_OUTPUT_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:CLD2>" "${PLUGIN_OUTPUT_DIR}/CLD2.4DX"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_OUTPUT_DIR}/CLD2.4DX.Resources"
-        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" "${PLUGIN_OUTPUT_DIR}/CLD2.4DX.Resources/manifest.json"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_OUTPUT_DIR}/Windows64"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:CLD2>" "${PLUGIN_OUTPUT_DIR}/Windows64/CLD2.4DX"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_OUTPUT_DIR}/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" "${PLUGIN_OUTPUT_DIR}/Resources/manifest.json"
     )
 
     target_compile_options(CLD2 PRIVATE
