@@ -87,6 +87,7 @@ elseif(WIN32)
     set_target_properties(CLD2 PROPERTIES
         PREFIX ""
         SUFFIX ".4DX"
+        LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/CLD2.def"
     )
 
     set(PLUGIN_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/CLD2-test/Plugins")
