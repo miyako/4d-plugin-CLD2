@@ -1,0 +1,16 @@
+{
+  "id": 31000,
+  "name": "CLD2",
+  "commands": [
+    {
+      "id": 1,
+      "name": "CLD2",
+      "theme": "CLD2",
+      "syntax": "CLD2({&T, Text}):O",
+      "params": [
+        {"name": "text", "type": "text", "direction": "in"}
+      ],
+      "returnType": "object"
+    }
+  ]
+}
