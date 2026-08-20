@@ -6,7 +6,7 @@
       "id": 1,
       "name": "CLD2",
       "theme": "CLD2",
-      "syntax": "CLD2({&T, Text}):O",
+      "syntax": "CLD2({&T, Text}):J",
       "params": [
         {"name": "text", "type": "text", "direction": "in"}
       ],

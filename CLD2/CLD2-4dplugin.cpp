@@ -76,7 +76,13 @@ static void doCLD2(PA_PluginParameters params) {
         eVTC_UTF_16);
 
     PA_Unistring jsonUstr = PA_CreateUnistring((PA_Unichar*)json16buf.data());
-    PA_Variable result = PA_JsonParse(&jsonUstr, eVK_Object);
 
-    PA_ReturnObject(params, result.uValue.fObject);
+    // Bypass PA_JsonParse (SDK bug: params not initialized for eVK_Object path)
+    PA_Variable cmdParams[2];
+    memset(cmdParams, 0, sizeof(cmdParams));
+    PA_SetStringVariable(&cmdParams[0], &jsonUstr);
+    PA_SetLongintVariable(&cmdParams[1], eVK_Object);
+    PA_Variable result = PA_ExecuteCommandByID(1218, cmdParams, 2); // JSON Parse
+
+    PA_ReturnObject(params, PA_GetObjectVariable(result));
 }
