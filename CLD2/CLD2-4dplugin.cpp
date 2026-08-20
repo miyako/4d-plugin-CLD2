@@ -77,7 +77,6 @@ static void doCLD2(PA_PluginParameters params) {
 
     PA_Unistring jsonUstr = PA_CreateUnistring((PA_Unichar*)json16buf.data());
     PA_Variable result = PA_JsonParse(&jsonUstr, eVK_Object);
-    PA_DisposeUnistring(&jsonUstr);
 
     PA_ReturnObject(params, result.uValue.fObject);
 }

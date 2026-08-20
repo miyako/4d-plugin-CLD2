@@ -1,1 +1,3 @@
 CLD2/cmake-build/*
+CLD2/CLD2-test/userPreferences.*
+CLD2/CLD2-test/Project/DerivedData/*
