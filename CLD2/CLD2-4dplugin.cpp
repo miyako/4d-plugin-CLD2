@@ -7,7 +7,13 @@
 
 static void doCLD2(PA_PluginParameters params);
 
-extern "C" __attribute__((visibility("default")))
+#if defined(_WIN32)
+#define PLUGIN_EXPORT extern "C" __declspec(dllexport)
+#else
+#define PLUGIN_EXPORT extern "C" __attribute__((visibility("default")))
+#endif
+
+PLUGIN_EXPORT
 void PluginMain(PA_long32 selector, PA_PluginParameters params) {
     switch (PA_GetCurrentProcessNumber()) {
         case kInitPlugin:
