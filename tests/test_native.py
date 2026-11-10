@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -271,3 +272,173 @@ class NativeTests(GitFixture):
                 path.write_bytes(saved)
         self.phase("sign")
         native.validate_final(self.local)
+
+    def ancestor_cleanup_command(self, platform, entry="cli"):
+        if entry == "bash":
+            script = next(step["run"] for step in self.jobs["build-macos"]["steps"]
+                          if step.get("name") == "build macOS plugin (universal)")
+            return ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script]
+        if entry == "powershell":
+            source = (self.local / ".github/scripts/native.ps1").read_text()
+            # Execute the actual cleanup/build tail, not the initial global-clean
+            # guard: stale outputs must reach cleanup to test this failure.
+            script = source.splitlines()[0] + "\n" + source[source.index(
+                "python .github/scripts/native.py clean-windows"):]
+            return ["/usr/local/bin/pwsh", "-NoLogo", "-NoProfile", "-NonInteractive",
+                    "-Command", script]
+        if entry == "postbuild":
+            source = (self.local / "CLD2/CMakeLists.txt").read_text()
+            match = re.search(
+                r'COMMAND python3 "\$\{CMAKE_CURRENT_SOURCE_DIR\}/../([^"]+)" (clean-bundle)',
+                source)
+            self.assertIsNotNone(match)
+            self.assertEqual(platform, "bundle")
+            return [str(self.tools / "python3"), match[1], match[2]]
+        return [sys.executable, ".github/scripts/native.py", "clean-" + platform]
+
+    def ancestor_outputs(self):
+        data = self.populate()
+        windows = self.local / native.WINDOWS
+        windows.parent.mkdir(parents=True, exist_ok=True)
+        windows.write_bytes(b"existing Windows output before ancestor check")
+        resource = native.WINDOWS.parents[1] / "Resources/manifest.json"
+        copied = self.local / resource
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        copied.write_bytes((self.local / "CLD2/manifest.json").read_bytes())
+        cache = self.local / native.BUILD / "CMakeCache.txt"
+        cache.parent.mkdir(exist_ok=True)
+        cache.write_bytes(b"later existing cache before ancestor check")
+        data.update({str(native.WINDOWS): windows.read_bytes(), str(resource): copied.read_bytes(),
+                     str(native.BUILD / "CMakeCache.txt"): cache.read_bytes()})
+        return data
+
+    def assert_ancestor_retained(self, data):
+        for relative, raw in data.items():
+            self.assertEqual((self.local / relative).read_bytes(), raw, relative)
+        self.assertFalse(self.log.exists(), "Ancestor rejection must precede every native command")
+        self.assertFalse(self.api_log.exists(), "Ancestor rejection must precede every API call")
+
+    def ancestor_case(self, platform, ancestor, kind, entry="cli"):
+        data = self.ancestor_outputs()
+        self.log.unlink(missing_ok=True)
+        self.api_log.unlink(missing_ok=True)
+        marker = self.local / ancestor / ".git"
+        if kind == "file":
+            marker.write_bytes(b"gitdir: forbidden ancestor metadata\n")
+        elif kind == "directory":
+            marker.mkdir()
+        elif kind == "symlink":
+            target = self.root / "marker-target"
+            target.write_bytes(b"existing metadata target")
+            marker.symlink_to(target)
+        elif kind == "dangling":
+            marker.symlink_to(self.root / "absent-metadata-target")
+        elif kind == "fifo":
+            os.mkfifo(marker)
+        command = self.ancestor_cleanup_command(platform, entry)
+        if kind in ("reparse", "dangling-reparse", "permission", "io", "not-directory"):
+            command = [sys.executable, "-c", f"""
+import errno, runpy, stat, sys, types
+from pathlib import Path
+sys.path.insert(0, ".github/scripts")
+target = Path({str(marker)!r})
+kind = {kind!r}
+original = Path.lstat
+def lstat(path, *args, **kwargs):
+    if path.absolute() == target:
+        if kind in ("reparse", "dangling-reparse"):
+            mode = stat.S_IFDIR if kind == "reparse" else stat.S_IFLNK
+            return types.SimpleNamespace(st_mode=mode, st_file_attributes=0x400)
+        if kind == "permission":
+            raise PermissionError(errno.EACCES, "ancestor Git probe denied", str(path))
+        if kind == "io":
+            raise OSError(errno.EIO, "ancestor Git probe I/O failure", str(path))
+        raise NotADirectoryError(errno.ENOTDIR, "ancestor Git probe wrong parent", str(path))
+    return original(path, *args, **kwargs)
+Path.lstat = lstat
+sys.argv = [".github/scripts/native.py", {"clean-" + platform!r}]
+runpy.run_path(".github/scripts/native.py", run_name="__main__")
+"""]
+        result = subprocess.run(command, cwd=self.local, env=self.env, text=True,
+                                capture_output=True, timeout=60)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(str(marker), result.stderr)
+        if kind == "permission":
+            self.assertIn("PermissionError", result.stderr)
+        elif kind in ("io", "not-directory"):
+            self.assertIn("ancestor Git probe", result.stderr)
+        else:
+            self.assertIn("Git marker in native ancestor", result.stderr)
+        self.assert_ancestor_retained(data)
+        if kind == "directory":
+            marker.rmdir()
+        elif kind in ("file", "symlink", "dangling", "fifo"):
+            marker.unlink()
+        result = subprocess.run(self.ancestor_cleanup_command(platform, entry), cwd=self.local,
+                                env=self.env, text=True, capture_output=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in (native.CONTENTS / "Resources/manifest.json",
+                     native.WINDOWS.parents[1] / "Resources/manifest.json"):
+            self.assertEqual((self.local / path).read_bytes(), data[str(path)])
+        self.assertEqual((self.local / "CLD2/manifest.json").read_bytes(),
+                         data[str(native.CONTENTS / "Resources/manifest.json")])
+        self.assertFalse(self.api_log.exists())
+
+    def test_ancestor_git_physical_marker_all_cleanup_plans_before_any_unlink(self):
+        for platform in ("macos", "windows", "bundle"):
+            ancestors = ["CLD2", "CLD2/CLD2-test", "CLD2/CLD2-test/Plugins"]
+            if platform != "bundle":
+                ancestors.append(str(native.BUILD))
+            for ancestor in ancestors:
+                for kind in ("file", "directory", "symlink", "dangling", "fifo"):
+                    with self.subTest(platform=platform, ancestor=ancestor, kind=kind):
+                        self.ancestor_case(platform, ancestor, kind)
+
+    def test_ancestor_git_reparse_and_typed_probe_errors_are_not_absence(self):
+        for platform in ("macos", "windows", "bundle"):
+            for ancestor in ("CLD2", "CLD2/CLD2-test/Plugins"):
+                for kind in ("reparse", "dangling-reparse", "permission", "io", "not-directory"):
+                    with self.subTest(platform=platform, ancestor=ancestor, kind=kind):
+                        self.ancestor_case(platform, ancestor, kind)
+
+    def test_ancestor_git_actual_extracted_bash_powershell_postbuild_no_native_or_api(self):
+        for platform, entry in (("macos", "bash"), ("windows", "powershell"),
+                                ("bundle", "postbuild")):
+            ancestors = ["CLD2", "CLD2/CLD2-test", "CLD2/CLD2-test/Plugins"]
+            if platform != "bundle":
+                ancestors.append(str(native.BUILD))
+            for ancestor in ancestors:
+                with self.subTest(entry=entry, ancestor=ancestor):
+                    self.ancestor_case(platform, ancestor, "directory", entry)
+
+    def test_ancestor_git_relative_absolute_consistency_and_root_metadata_exemption(self):
+        self.ancestor_outputs()
+        for ancestor, leaf in (
+                ("CLD2", native.EXECUTABLE), ("CLD2/CLD2-test", native.EXECUTABLE),
+                ("CLD2/CLD2-test/Plugins", native.WINDOWS),
+                (str(native.BUILD), native.BUILD / "CMakeCache.txt")):
+            marker = self.local / ancestor / ".git"
+            marker.write_bytes(b"gitdir: forbidden\n")
+            for path in (leaf, self.local / leaf):
+                result = self.cli("-c", (
+                    "import sys;from pathlib import Path;sys.path.insert(0,'.github/scripts');"
+                    f"import native;native.regular(Path({str(path)!r}),Path.cwd())"))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Git marker in native ancestor", result.stderr)
+            marker.unlink()
+            self.assertEqual(native.regular(leaf, self.local),
+                             native.regular(self.local / leaf, self.local))
+        # A real checkout may own either a .git directory or a worktree-style
+        # gitfile. Neither is nested cleanup metadata, and dependencies are not walked.
+        original_git = self.local / ".git"
+        relocated = self.root / "legitimate-root.git"
+        original_git.rename(relocated)
+        original_git.write_text("gitdir: " + str(relocated) + "\n")
+        self.assertEqual(self.git("rev-parse", "--show-toplevel"), str(self.local))
+        for platform in ("macos", "windows", "bundle"):
+            self.ancestor_outputs()
+            result = self.cli(".github/scripts/native.py", "clean-" + platform)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        for dependency in ("4D-Plugin-SDK", "cld2-src"):
+            self.assertEqual(self.git("-C", dependency, "rev-parse", "HEAD"),
+                             self.dependency_shas[dependency])

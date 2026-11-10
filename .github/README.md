@@ -79,6 +79,14 @@ building. It validates **all** targets, ancestors, descendants, types, access,
 links/reparse points, and nested `.git` before the first deletion. Unexpected
 leaves are refused even inside empty auxiliary directories. Source files and
 the copied manifest bytes are retained. Cleanup never removes an output tree.
+Each traversed directory below the legitimate checkout root is also probed
+with `lstat` for its own `.git` marker, including ancestors outside the output
+walk. Any marker type is rejected (file, directory, symlink, dangling/reparse
+point, or special file). Only actual `ENOENT` absence is tolerated; permission,
+I/O, and wrong-parent errors propagate before any deletion. The checkout
+root's legitimate `.git` is exempt; initialized dependency Git markers are not
+traversed because dependencies are not cleanup roots. Relative and absolute
+native paths receive the same ancestor checks.
 
 The source/index/HEAD and raw bytes are verified initially and again before
 publication, including both `git ls-files -v` and `-f`. Both gitlinks,

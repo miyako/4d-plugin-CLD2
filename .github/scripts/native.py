@@ -1,6 +1,7 @@
 """Prevalidate exact CMake outputs before file-only cleanup; preserve source bytes."""
 
 import argparse
+import errno
 import os
 from pathlib import Path
 import re
@@ -113,6 +114,13 @@ def regular(path, root=ROOT):
         if stat.S_ISDIR(status.st_mode):
             if status.st_mode & 0o555 != 0o555 or not os.access(current, os.R_OK | os.X_OK):
                 raise ValueError(f"Inaccessible native directory: {current}")
+            try:
+                (current / ".git").lstat()
+            except FileNotFoundError as error:
+                if error.errno != errno.ENOENT:
+                    raise
+            else:
+                raise ValueError(f"Git marker in native ancestor: {current / '.git'}")
         elif status.st_mode & 0o444 == 0 or not os.access(current, os.R_OK):
             raise ValueError(f"Inaccessible native file: {current}")
     return root / relative
