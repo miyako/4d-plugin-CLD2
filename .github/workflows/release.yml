@@ -1,14 +1,7 @@
-name: Build & Release
+name: Build
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to build (e.g. v2.3.0)
-        required: true
 
 permissions:
   contents: write
@@ -16,24 +9,34 @@ permissions:
 env:
   PRODUCT_NAME: CLD2
   MACOS_DEPLOYMENT_TARGET: '10.13'
+  PYTHONDONTWRITEBYTECODE: '1'
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: 'false'
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: cld2-publication
   cancel-in-progress: false
 
 jobs:
-
   version:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.set.outputs.tag }}
       version: ${{ steps.set.outputs.version }}
     steps:
-      - id: set
-        run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Validate immutable source and availability before native work
+        id: set
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/release.py preflight --sha "$EVENT_SHA"
 
   build-windows:
     name: Build Windows (x64)
@@ -42,24 +45,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
-      - name: build with CMake
+      - name: Validate, clean exact outputs and build with original CMake recipe
         shell: pwsh
-        run: |
-          cd ${{ env.PRODUCT_NAME }}
-          mkdir cmake-build; cd cmake-build
-          cmake .. -A x64
-          cmake --build . --config Release
+        run: ./.github/scripts/native.ps1
 
       - name: upload windows binaries
         uses: actions/upload-artifact@v4
         with:
           name: windows-binaries
-          path: |
-            ${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
+          path: CLD2/CLD2-test/Plugins/CLD2/Contents/Windows64/CLD2.4DX
           if-no-files-found: error
 
   build-macos:
@@ -69,9 +67,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Recheck selected clean source and availability before native work
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/release.py preflight --sha "$EVENT_SHA"
 
       - name: download windows binaries
         uses: actions/download-artifact@v4
@@ -106,6 +110,7 @@ jobs:
           TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
           APP_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
         run: |
+          set -euo pipefail
           xcrun notarytool store-credentials "notarytool-profile" \
             --apple-id "$APPLE_ID" \
             --team-id "$TEAM_ID" \
@@ -113,60 +118,19 @@ jobs:
             --keychain "$KEYCHAIN_PATH"
 
       - name: build macOS plugin (universal)
-        run: |
-          cd ${{ env.PRODUCT_NAME }}
-          mkdir -p cmake-build && cd cmake-build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}"
-          cmake --build .
+        run: bash .github/scripts/native.sh build
 
-      - name: verify universal binary
-        run: |
-          set -euo pipefail
-          BIN="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}"
-          lipo -info "$BIN"
-          lipo -info "$BIN" | grep -q "arm64" && lipo -info "$BIN" | grep -q "x86_64"
+      - name: merge Windows binaries and verify unsigned package
+        run: bash .github/scripts/native.sh merge
 
-      - name: merge Windows binaries into the bundle
-        run: |
-          set -euo pipefail
-          BUNDLE="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
-          mkdir -p "$BUNDLE/Contents/Windows64"
-          cp "winbuild/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
-          echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
-
-      - name: codesign
-        run: |
-          set -euo pipefail
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          echo "Signing with: $IDENTITY"
-          codesign --verbose --deep --timestamp --force --options=runtime \
-            --sign "$IDENTITY" "$BUNDLE_PATH"
+      - name: codesign and strictly verify
+        run: bash .github/scripts/native.sh sign
 
       - name: package, notarize & staple
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.version.outputs.version }}"
-          ZIP_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.zip"
-          DMG_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.dmg"
+        run: bash .github/scripts/native.sh package
 
-          ditto -c -k --keepParent "$BUNDLE_PATH" "$ZIP_PATH"
-          hdiutil create -format UDBZ -volname "${{ env.PRODUCT_NAME }}" -srcfolder "$BUNDLE_PATH" "$DMG_PATH"
-
-          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun stapler staple "$DMG_PATH"
-
-          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
-          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
-
-      - name: create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          files: |
-            ${{ env.ZIP_PATH }}
-            ${{ env.DMG_PATH }}
+      - name: Revalidate retained outputs and create only a new tag, release and assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/release.py publish --sha "$EVENT_SHA" "$ZIP_PATH" "$DMG_PATH"

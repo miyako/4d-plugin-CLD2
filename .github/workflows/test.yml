@@ -6,6 +6,11 @@ on:
       - '*'
   workflow_dispatch:
 
+env:
+  GIT_CONFIG_COUNT: '1'
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: 'false'
+
 jobs:
   test:
     strategy:
@@ -25,6 +30,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
 
@@ -47,7 +53,9 @@ jobs:
             version="${major} R${r_version}"
           fi
           branch="${major}.x"
+          # shellcheck disable=SC2086
           echo "branch=${branch}" >> $GITHUB_OUTPUT
+          # shellcheck disable=SC2086
           echo "version=${version}" >> $GITHUB_OUTPUT
 
       - name: Download tool4d
@@ -79,6 +87,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          # shellcheck disable=SC2046
           tool4d.app/Contents/MacOS/tool4d \
             --dataless \
             --startup-method=test_all \

@@ -61,7 +61,7 @@ if(APPLE)
 
     set(PLUGIN_OUTPUT "${CMAKE_CURRENT_SOURCE_DIR}/CLD2-test/Plugins/CLD2.bundle")
     add_custom_command(TARGET CLD2 POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E remove_directory "${PLUGIN_OUTPUT}"
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../.github/scripts/native.py" clean-bundle
         COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:CLD2>" "${PLUGIN_OUTPUT}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${PLUGIN_OUTPUT}/Contents/Resources"
         COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" "${PLUGIN_OUTPUT}/Contents/Resources/manifest.json"
