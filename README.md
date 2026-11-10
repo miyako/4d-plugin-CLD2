@@ -62,6 +62,10 @@ $result:=CLD2("これは日本語のテストです")
 
 ## Building from Source
 
+Python 3 is required for validated, file-only bundle cleanup during the macOS
+CMake post-build step. The native CMake generators and output layout are
+unchanged.
+
 ```bash
 git clone --recursive https://github.com/miyako/4d-plugin-CLD2.git
 cd 4d-plugin-CLD2/CLD2
@@ -69,6 +73,18 @@ mkdir cmake-build && cd cmake-build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build .
 ```
+
+## Maintaining releases
+
+Run **Bump version** manually on a branch to change root `VERSION` only, then
+run the independent zero-input **Build** workflow on the resulting commit.
+Build creates a new tag, release, ZIP, and DMG only when that version has no
+existing tag or draft/published release. It never replaces existing assets.
+`VERSION` controls archive/release names; `CLD2/Info.plist` has independent
+static short/build metadata (`1.0.0`/`1.0.0`) and is not changed by Bump.
+
+See [.github/README.md](.github/README.md) for guards, partial-publication
+recovery, and the full offline regression/lint commands.
 
 ## License
 
